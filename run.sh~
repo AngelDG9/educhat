@@ -1,0 +1,93 @@
+#!/bin/bash
+# run.sh: Script para configurar, compilar, y ejecutar el sistema RMI con PostgreSQL
+
+export PGPASSWORD=dit
+
+# ---------------------------
+# 1. Verificar e iniciar PostgreSQL
+# ---------------------------
+echo "Verificando el servicio de PostgreSQL..."
+if ! pg_isready -U dit > /dev/null 2>&1; then
+    echo "PostgreSQL no parece estar activo. Intentando iniciarlo..."
+    # Dependiendo de tu sistema, usa systemctl, service o un comando similar.
+    # Ejemplo para sistemas con systemctl:
+    sudo systemctl start postgresql
+    sleep 3
+    if ! pg_isready -U dit > /dev/null 2>&1; then
+        echo "No se pudo iniciar PostgreSQL. Verifica tu instalación."
+        exit 1
+    fi
+fi
+echo "PostgreSQL está activo."
+
+# ---------------------------
+# 2. Crear la base de datos 'academico' si no existe
+# ---------------------------
+echo "Comprobando si existe la base de datos 'academico'..."
+DB_EXISTS=$(psql -U dit -lqt | cut -d \| -f 1 | grep -w academico)
+if [ -z "$DB_EXISTS" ]; then
+    echo "La base de datos 'academico' no existe. Creándola..."
+    createdb -U dit academico
+    if [ $? -ne 0 ]; then
+        echo "Error al crear la base de datos 'academico'."
+        exit 1
+    fi
+else
+    echo "La base de datos 'academico' ya existe."
+fi
+
+# ---------------------------
+# 3. Ejecutar el script SQL para crear las tablas
+# ---------------------------
+echo "Ejecutando el script SQL de creación de tablas..."
+psql -U dit -d academico -f bbdd/creatablas.sql
+if [ $? -ne 0 ]; then
+    echo "Error ejecutando el script SQL."
+    exit 1
+fi
+
+# ---------------------------
+# 4. Compilar el código Java
+# ---------------------------
+echo "Compilando el código fuente..."
+javac -d . interfaces/*.java servidor/*.java clientes/*.java
+if [ $? -ne 0 ]; then
+    echo "Error en la compilación. Revise los errores y vuelva a intentarlo."
+    exit 1
+fi
+
+# ---------------------------
+# 5. Iniciar rmiregistry en el puerto 54355
+# ---------------------------
+echo "Iniciando rmiregistry en el puerto 54355..."
+rmiregistry 54355 &
+RMI_PID=$!
+sleep 2
+
+# ---------------------------
+# 6. Iniciar el Servidor RMI
+# ---------------------------
+echo "Iniciando el servidor RMI..."
+java -cp .:libs/postgresql-42.7.3.jar servidor.ServidorAcademico &
+SERVER_PID=$!
+sleep 2
+
+echo "Servidor y rmiregistry están en ejecución en el puerto 54355."
+echo "--------------------------------------------------------------"
+echo "Para probar, abre otras terminales y ejecuta uno de los clientes:"
+echo "  java -cp .:libs/postgresql-42.7.3.jar clientes.ClienteAdministrador"
+echo "  java -cp .:libs/postgresql-42.7.3.jar clientes.ClienteProfesor"
+echo "  java -cp .:libs/postgresql-42.7.3.jar clientes.ClienteAlumno"
+echo "--------------------------------------------------------------"
+echo "Presiona [ENTER] para detener el servidor y rmiregistry."
+read
+
+# ---------------------------
+# 7. Detener servicios
+# ---------------------------
+echo "Deteniendo el servidor y rmiregistry..."
+kill $SERVER_PID
+kill $RMI_PID
+
+echo "Proceso finalizado."
+
